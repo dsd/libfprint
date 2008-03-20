@@ -1,4 +1,4 @@
-AC_INIT([libfprint], [0.0.5])
+AC_INIT([libfprint], [0.0.6])
 AM_INIT_AUTOMAKE
 AC_CONFIG_SRCDIR([libfprint/core.c])
 AM_CONFIG_HEADER([config.h])

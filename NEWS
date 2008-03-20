@@ -1,6 +1,10 @@
 This file lists notable changes in each release. For the full history of all
 changes, see ChangeLog.
 
+2008-03-20: v0.0.6 release
+ * Add Secugen FDU2000 driver (Gustavo Chain)
+ * Support more DigitalPersona devices (Daniel Drake, Michael Cole)
+
 2007-12-07: v0.0.5 release
  * AES1610 imaging improvements
  * Internal cleanups for Authentec drivers
