@@ -77,40 +77,44 @@ enum {
 
 static const struct uru4k_dev_profile {
 	const char *name;
-	uint16_t firmware_start;
-	uint16_t fw_enc_offset;
 	gboolean auth_cr;
 } uru4k_dev_info[] = {
 	[MS_KBD] = {
 		.name = "Microsoft Keyboard with Fingerprint Reader",
-		.fw_enc_offset = 0x411,
 		.auth_cr = FALSE,
 	},
 	[MS_INTELLIMOUSE] = {
 		.name = "Microsoft Wireless IntelliMouse with Fingerprint Reader",
-		.fw_enc_offset = 0x411,
 		.auth_cr = FALSE,
 	},
 	[MS_STANDALONE] = {
 		.name = "Microsoft Fingerprint Reader",
-		.fw_enc_offset = 0x411,
 		.auth_cr = FALSE,
 	},
 	[MS_STANDALONE_V2] = {
 		.name = "Microsoft Fingerprint Reader v2",
-		.fw_enc_offset = 0x52e,
 		.auth_cr = TRUE,	
 	},
 	[DP_URU4000] = {
 		.name = "Digital Persona U.are.U 4000",
-		.fw_enc_offset = 0x693,
 		.auth_cr = FALSE,
 	},
 	[DP_URU4000B] = {
 		.name = "Digital Persona U.are.U 4000B",
-		.fw_enc_offset = 0x411,
 		.auth_cr = FALSE,
 	},
+};
+
+/* As we don't know the encryption scheme, we have to disable encryption
+ * by powering the device down and modifying the firmware. The location of
+ * the encryption control byte changes based on device revision.
+ *
+ * We use a search approach to find it: we look at the 3 bytes of data starting
+ * from these addresses, looking for a pattern "ff X7 41" (where X is dontcare)
+ * When we find a pattern we know that the encryption byte is the X7 byte.
+ */
+static const uint16_t fwenc_offsets[] = {
+	0x510, 0x62d, 0x792, 0x7f4,
 };
 
 struct uru4k_dev {
@@ -453,32 +457,51 @@ err:
 
 static int fix_firmware(struct fp_img_dev *dev)
 {
-	struct uru4k_dev *urudev = dev->priv;
-	uint32_t enc_addr = FIRMWARE_START + urudev->profile->fw_enc_offset;
+	uint16_t enc_addr = 0;
+	unsigned char fwdata[3];
 	unsigned char val, new;
 	int r;
+	int i;
 
-	r = usb_control_msg(dev->udev, 0xc0, 0x0c, enc_addr, 0, &val, 1,
-		CTRL_TIMEOUT);
-	if (r < 0)
-		return r;
-	
+	for (i = 0; i < G_N_ELEMENTS(fwenc_offsets); i++) {
+		uint16_t try_addr = fwenc_offsets[i];
+
+		fp_dbg("looking for encryption byte at %x", try_addr);
+		r = usb_control_msg(dev->udev, 0xc0, 0x0c, try_addr, 0, fwdata, 3,
+			CTRL_TIMEOUT);
+		if (r < 0)
+			return r;
+		if (r < 3)
+			return -EPROTO;
+
+		fp_dbg("data: %02x %02x %02x", fwdata[0], fwdata[1], fwdata[2]);
+		if (fwdata[0] == 0xff && (fwdata[1] & 0x0f) == 0x07
+				&& fwdata[2] == 0x41) {
+			fp_dbg("spotted the encryption byte!");
+			enc_addr = try_addr;
+			break;
+		} else {
+			fp_dbg("that's not the encryption byte :(");
+		}
+	}
+
+	if (!enc_addr) {
+		fp_err("could not find encryption byte");
+		return -ENODEV;
+	}
+
+	val = fwdata[1];
+	enc_addr++;
 	fp_dbg("encryption byte at %x reads %02x", enc_addr, val);
-	if (val != 0x07 && val != 0x17)
-		fp_dbg("strange encryption byte value, please report this");
-
 	new = val & 0xef;
-	//new = 0x17;
-	if (new == val)
+	if (new == val) {
+		fp_dbg("encryption already disabled");
 		return 0;
+	}
 
-	r = usb_control_msg(dev->udev, 0x40, 0x04, enc_addr, 0, &new, 1,
+	fp_dbg("fixing encryption byte to %02x", new);
+	return usb_control_msg(dev->udev, 0x40, 0x04, enc_addr, 0, &new, 1,
 		CTRL_TIMEOUT);
-	if (r < 0)
-		return r;
-
-	fp_dbg("fixed encryption byte to %02x", new);
-	return 1;
 }
 
 static int do_init(struct fp_img_dev *dev)
